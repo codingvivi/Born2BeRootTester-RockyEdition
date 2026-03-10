@@ -124,24 +124,14 @@ function	check_lvm()
 
 function	check_ssh()
 {
-	is_installed=$(sudo systemctl list-units 2>/dev/null | grep -o ssh)
-	ssh_port=$(sed -nE 's|^Port\s*([0-9]*).*|\1|p' /etc/ssh/sshd_config 2>/dev/null)
-	prohibit_root=$(sed -nE 's|^PermitRootLogin\s*(no).*|\1|p' /etc/ssh/sshd_config 2>/dev/null)
-	[ ${is_installed} ] && ssh_1=1 || ssh_1=0
-	[ "${ssh_port}" == 4242 ] && ssh_2=1 || ssh_2=0
-	[ ${prohibit_root} ] && ssh_3=1 || ssh_3=0
-}
-
-function	check_ufw()
-{
-	is_installed=$(sudo which ufw 2>/dev/null)
-	is_enabled=$(sudo ufw status  2>/dev/null | sed -nE 's|Status: (active)|\1|p')
-	rule_1=$(sudo ufw status 2>/dev/null | sed -znE 's|.*4242.*(ALLOW).*|\1|p')
-	rule_2=$(sudo ufw status 2>/dev/null | sed -znE 's|.*4242/(udp).*ALLOW.*|\1|p')
-	[ ${is_installed} ] && ufw_1=1 || ufw_1=0
-	[ ${is_enabled} ] && ufw_2=1 || ufw_2=0
-	[ "${rule_1}" == "ALLOW" ] && ufw_3=1 || ufw_3=0
-	[ "${rule_2}" == "udp" ] && ufw_4=0 || ufw_4=1
+	is_installed=$(sudo systemctl is-active sshd 2>/dev/null)
+	ssh_port=$(grep -hE '^Port\s' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | \
+				sed -nE 's|^Port\s*([0-9]*).*|\1|p' | tail -n1)
+	prohibit_root=$(grep -hE '^PermitRootLogin\s' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | \
+				sed -nE 's|^PermitRootLogin\s*(no).*|\1|p' | tail -n1)
+	[ "${is_installed}" == "active" ] && ssh_1=1 || ssh_1=0
+	[ "${ssh_port}" == "4242" ] && ssh_2=1 || ssh_2=0
+	[ "${prohibit_root}" ] && ssh_3=1 || ssh_3=0
 }
 
 function	check_hostname()
@@ -159,35 +149,26 @@ function	check_hostname()
 
 function	check_pam_and_sec()
 {
-	is_in_common=$(grep -v '^#' /etc/pam.d/common-password 2>/dev/null | \
-					grep "pam_pwquality\|pam_cracklib" | \
-					sed -nE "s|.*?${1}\s*?=\s*?([0-9-]*).*|\1|p" 2>/dev/null | \
-					tail -n1)
-	if [ -z ${is_in_common} ]; then
-		is_in_security=$(grep -v '^#' /etc/security/pwquality.conf 2>/dev/null | \
-					sed -nE "s|.*?${1}\s*?=\s*?([0-9-]*).*|\1|p" 2>/dev/null)
-		if [ -z ${is_in_security} ]; then
-			return 0
-		else
-			return ${is_in_security}
-		fi
+	is_in_security=$(grep -v '^#' /etc/security/pwquality.conf 2>/dev/null | \
+				sed -nE "s|.*?${1}\s*?=\s*?([0-9-]*).*|\1|p" 2>/dev/null)
+	if [ -z ${is_in_security} ]; then
+		return 0
 	else
-		return ${is_in_common}
+		return ${is_in_security}
 	fi
 }
 
 function	check_strong_password_user()
 {
-	rule_username_usercheck_1=$(grep -v "^#" /etc/pam.d/common-password | sed -nE 's|(usercheck\s*?=\s*?0)|\1|p')
-	rule_username_usercheck_2=$(grep -v "^#" /etc/security/pwquality.conf 2>/dev/null \ |
-								sed -nE 's|(usercheck\s*?=\s*?0)|\1|p' 2>/dev/null)
+	rule_username_usercheck=$(grep -v "^#" /etc/security/pwquality.conf 2>/dev/null | \
+							sed -nE 's|(usercheck\s*?=\s*?0)|\1|p' 2>/dev/null)
+	rule_username_rejectuser=$(grep -v "^#" /etc/security/pwquality.conf 2>/dev/null | \
+							grep -o 'reject_username' 2>/dev/null)
 
-	rule_username_rejectuser_1=$(grep -v "^#" /etc/pam.d/common-password | grep -o 'reject_username')
-
-	if [ "${rule_username_usercheck_1}" ] || [ "${rule_username_usercheck_2}" ]; then
+	if [ "${rule_username_usercheck}" ]; then
 		pwquality_16=0
-		if [ "${rule_username_rejectuser_1}" ]; then
-			pwquali2>/dev/nullty_16=1
+		if [ "${rule_username_rejectuser}" ]; then
+			pwquality_16=1
 		fi
 	else
 		pwquality_16=1
@@ -218,19 +199,14 @@ function	check_strong_password()
 	check_strong_password_user
 	check_pam_and_sec "difok"
 	rule_diff_old=${?}
-	is_in_common=$(grep -v '^#' /etc/pam.d/common-password 2>/dev/null | sed -nE "s|.*?(enforce_for_root).*|\1|p" 2>/dev/null)
-	if [ -z ${is_in_common} ]; then
-		is_in_security=$(grep -v '^#' /etc/security/pwquality.conf 2>/dev/null | sed -nE "s|.*?(enforce_for_root).*|\1|p" 2>/dev/null)
-		if [ -z "${is_in_security}" ]; then
-			rule_force_root="0"
-		else
-			rule_force_root=${is_in_security}
-		fi
+	is_in_security=$(grep -v '^#' /etc/security/pwquality.conf 2>/dev/null | sed -nE "s|.*?(enforce_for_root).*|\1|p" 2>/dev/null)
+	if [ -z "${is_in_security}" ]; then
+		rule_force_root="0"
 	else
-		rule_force_root=${is_in_common}
+		rule_force_root=${is_in_security}
 	fi
-	if [ -f "/usr/lib/x86_64-linux-gnu/security/pam_pwquality.so" ] || \
-	   [ -f "/usr/lib/x86_64-linux-gnu/security/pam_cracklib.so" ]; then
+	if [ -f "/usr/lib64/security/pam_pwquality.so" ] || \
+	   [ -f "/usr/lib/security/pam_pwquality.so" ]; then
 		pwquality_1=1
 	else
 		pwquality_1=0
@@ -255,17 +231,18 @@ function	check_strong_password()
 
 function	check_strict_sudo()
 {
-	passwd_tries=$(sudo sed -nE 's|^Default.*passwd_tries=(3).*|\1|p' /etc/sudoers 2>/dev/null)
-	passwd_tries_2=$(sudo sed -nE 's|^Default.*(passwd_tries=).*|\1|p' /etc/sudoers 2>/dev/null)
-	passwd_message=$(sudo sed -nE 's|^Default.*badpass_message="(.+)".*|\1|p' /etc/sudoers 2>/dev/null)
-	passwd_message_2=$(sudo sed -nE 's|^Default.*(insults).*|\1|p' /etc/sudoers 2>/dev/null)
-	passwd_input=$(sudo sed -nE 's|^Default.*(log_input).*|\1|p' /etc/sudoers 2>/dev/null)
-	passwd_output=$(sudo sed -nE 's|^Default.*(log_output).*|\1|p' /etc/sudoers 2>/dev/null)
+	sudoers_content=$(sudo cat /etc/sudoers 2>/dev/null; sudo cat /etc/sudoers.d/* 2>/dev/null)
+	passwd_tries=$(echo "${sudoers_content}" | sed -nE 's|^Default.*passwd_tries=(3).*|\1|p')
+	passwd_tries_2=$(echo "${sudoers_content}" | sed -nE 's|^Default.*(passwd_tries=).*|\1|p')
+	passwd_message=$(echo "${sudoers_content}" | sed -nE 's|^Default.*badpass_message="(.+)".*|\1|p')
+	passwd_message_2=$(echo "${sudoers_content}" | sed -nE 's|^Default.*(insults).*|\1|p')
+	passwd_input=$(echo "${sudoers_content}" | sed -nE 's|^Default.*(log_input).*|\1|p')
+	passwd_output=$(echo "${sudoers_content}" | sed -nE 's|^Default.*(log_output).*|\1|p')
 	log_path="/var/log/sudo/sudo.log"
-	passwd_log=$(sudo sed -nE "s|^Default.*logfile=\"?(${log_path})\"?.*|\1|p" /etc/sudoers 2>/dev/null)
-	passwd_tty=$(sudo sed -nE 's|^Default.*(requiretty).*|\1|p' /etc/sudoers 2>/dev/null)
+	passwd_log=$(echo "${sudoers_content}" | sed -nE "s|^Default.*logfile=\"?(${log_path})\"?.*|\1|p")
+	passwd_tty=$(echo "${sudoers_content}" | sed -nE 's|^Default.*(requiretty).*|\1|p')
 	restricted_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
-	passwd_secure_path=$(sudo sed -nE "s|^Default.*(secure_path=\"?.+\"?).*|\1|p" /etc/sudoers 2>/dev/null)
+	passwd_secure_path=$(echo "${sudoers_content}" | grep -oE 'secure_path[[:space:]]*=[[:space:]]*"?[^"[:space:]]+"?')
 	if [ "${passwd_tries}" ]; then
 		sudo_1=1
 	elif [ ! "${passwd_tries_2}" ]; then
@@ -289,9 +266,9 @@ function	check_strict_sudo()
 
 function	check_username()
 {
-	username=$(cat /etc/passwd | grep -o ${LOGIN} | uniq)
-	have_sudo=$(id ${LOGIN} 2>/dev/null | grep -o sudo)
-	have_user42=$(id ${LOGIN} 2>/dev/null | grep -o user42)
+	username=$(grep -o "${LOGIN}" /etc/passwd | uniq)
+	have_sudo=$(id "${LOGIN}" 2>/dev/null | grep -oE 'sudo|wheel')
+	have_user42=$(id "${LOGIN}" 2>/dev/null | grep -o user42)
 	[ "${username}" == "${LOGIN}" ] && username_1=1 || username_1=0
 	[ "${have_sudo}" ] && username_2=1 || username_2=0
 	[ "${have_user42}" ] && username_3=1 || username_3=0
@@ -309,7 +286,6 @@ function	check_mandatory()
 	check_c
 	check_lvm
 	check_ssh
-	check_ufw
 	check_hostname
 	check_strong_password
 	check_strict_sudo
@@ -371,23 +347,6 @@ function	report_ssh()
 	fi
 	if [ "${ssh_3}" == 0 ]; then
 		echo_deep "you don't prevent root to login from ssh"
-	fi
-}
-
-function	report_ufw()
-{
-	echo_deep_part "FIREWALL"
-	if [ "${ufw_1}" == 0 ]; then
-		echo_deep "ufw is not installed"
-	fi
-	if [ "${ufw_2}" == 0 ]; then
-		echo_deep "ufw is not enabled"
-	fi
-	if [ "${ufw_3}" == 0 ]; then
-		echo_deep "ufw don't have a rule for 4242"
-	fi
-	if [ "${ufw_4}" == 0 ]; then
-		echo_deep "SSH use tcp, not udp"
 	fi
 }
 
@@ -525,10 +484,6 @@ function	report_check_part()
 	[ "${ssh_1}" == 1 ] && \
 	[ "${ssh_2}" == 1 ] && \
 	[ "${ssh_3}" == 1 ] && ssh_success=1
-	[ "${ufw_1}" == 1 ] && \
-	[ "${ufw_2}" == 1 ] && \
-	[ "${ufw_3}" == 1 ] && \
-	[ "${ufw_4}" == 1 ] && ufw_success=1
 	[ "${hostname_1}" == 1 ] && \
 	[ "${hostname_2}" == 1 ] && hostname_success=1
 	[ "${pwquality_1}" == 1 ] && \
@@ -569,7 +524,6 @@ function	report_check_section()
 {
 	[ "${lvm_success}" == "1" ] && \
 	[ "${ssh_success}" == "1" ] && \
-	[ "${ufw_success}" == "1" ] && \
 	[ "${hostname_success}" == "1" ] && \
 	[ "${pwquality_success}" == "1" ] && \
 	[ "${sudo_success}" == "1" ] && \
@@ -593,7 +547,6 @@ function	make_report()
 	[ "${mandatory_succes}" == "1" ] || echo_deep_section "MANDATORY"
 	[ "${lvm_success}" == "1" ] || report_lvm_crypted
 	[ "${ssh_success}" == "1" ] || report_ssh
-	[ "${ufw_success}" == "1" ] || report_ufw
 	[ "${hostname_success}" == "1" ] || report_hostname
 	[ "${pwquality_success}" == "1" ] || report_strong_password
 	[ "${sudo_success}" == "1" ] || report_strict_sudo
@@ -656,21 +609,6 @@ function	print_ssh()
 	[ ${ssh_1} == 1 ] || print_subpart "openssh-server is not installed"
 	[ ${ssh_2} == 1 ] || print_subpart "wrong port, ${ssh_port} instead of 4242"
 	[ ${ssh_3} == 1 ] || print_subpart "you don't prevent root to login from ssh"
-	printf "\n"
-}
-
-function	print_ufw()
-{
-	print_subpart_title "FIREWALL"
-	[ ${ufw_1} == 1 ] && printf "${SUCCESS}" || printf "${FAILED}"
-	[ ${ufw_2} == 1 ] && printf "${SUCCESS}" || printf "${FAILED}"
-	[ ${ufw_3} == 1 ] && printf "${SUCCESS}" || printf "${FAILED}"
-	[ ${ufw_4} == 1 ] && printf "${SUCCESS}" || printf "${FAILED}"
-	printf "\n"
-	[ ${ufw_1} == 1 ] || print_subpart "ufw is not installed"
-	[ ${ufw_2} == 1 ] || print_subpart "ufw is not enabled"
-	[ ${ufw_3} == 1 ] || print_subpart "ufw don't have a rule for 4242"
-	[ ${ufw_4} == 1 ] || print_subpart "SSH use tcp, not udp"
 	printf "\n"
 }
 
@@ -771,7 +709,6 @@ function	print_mandatory()
 	fi
 	print_lvm_crypted
 	print_ssh
-	print_ufw
 	print_hostname
 	print_strong_password
 	print_strict_sudo
